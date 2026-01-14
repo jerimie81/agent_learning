@@ -1,0 +1,82 @@
+#!/bin/bash
+# init_codex_db.sh
+# DIRECTIVE: Executed by the agent if memory.db is missing.
+
+DB_PATH="$HOME/.codex/memory.db"
+mkdir -p "$(dirname "$DB_PATH")"
+
+sqlite3 "$DB_PATH" <<EOF
+PRAGMA foreign_keys = ON;
+
+-- 1. Conversation History
+CREATE TABLE IF NOT EXISTS conversations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    role TEXT CHECK(role IN ('user', 'agent', 'system')),
+    content TEXT,
+    context_summary TEXT
+);
+
+-- 2. Project Metadata & Dependencies
+CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    path TEXT UNIQUE,
+    language TEXT CHECK(language IN ('python', 'java', 'kotlin', 'rust', 'shell', 'other')),
+    build_system TEXT,
+    last_modified DATETIME
+);
+
+-- 3. The Code Library (Reusable Snippets)
+CREATE TABLE IF NOT EXISTS code_library (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    language TEXT,
+    tags TEXT,
+    description TEXT,
+    snippet_content TEXT,
+    usage_count INTEGER DEFAULT 0
+);
+
+-- 4. Code Revision & User Preference Knowledge Base
+CREATE TABLE IF NOT EXISTS code_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    file_path TEXT,
+    original_snippet TEXT,
+    revised_snippet TEXT,
+    user_feedback TEXT,
+    agent_notes TEXT
+);
+
+-- 5. Command History (CLI Inputs)
+CREATE TABLE IF NOT EXISTS command_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    command_str TEXT NOT NULL,
+    working_directory TEXT,
+    exit_code INTEGER,
+    output_summary TEXT
+);
+
+-- 6. File System Index
+CREATE TABLE IF NOT EXISTS file_index (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_path TEXT UNIQUE NOT NULL,
+    file_name TEXT,
+    file_type TEXT,
+    last_indexed DATETIME,
+    project_id INTEGER,
+    FOREIGN KEY(project_id) REFERENCES projects(id)
+);
+
+-- 7. Knowledge Bases (Comprehensive Documents)
+CREATE TABLE IF NOT EXISTS knowledge_bases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    content TEXT NOT NULL,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    tags TEXT
+);
+EOF
+
+echo "Codex Memory Matrix Initialized at $DB_PATH"

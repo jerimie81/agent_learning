@@ -1,0 +1,32 @@
+#!/bin/bash
+# insert_ared_tools.sh
+# DIRECTIVE: Inserts ARED_TOOLS.md.txt into the knowledge_bases table.
+
+set -euo pipefail
+
+DB_PATH="$HOME/.codex/memory.db"
+ARED_PATH="$HOME/.codex/ARED_TOOLS.md.txt"
+
+if [ ! -f "$DB_PATH" ]; then
+    echo "Error: memory.db does not exist. Run init_codex_db.sh first."
+    exit 1
+fi
+
+if [ ! -f "$ARED_PATH" ]; then
+    echo "Error: ARED_TOOLS.md.txt not found at $ARED_PATH"
+    exit 1
+fi
+
+ARED_CONTENT=$(cat "$ARED_PATH")
+ARED_CONTENT=${ARED_CONTENT//\'/\'\'}
+
+sqlite3 "$DB_PATH" <<SQL_EOF_ARED
+INSERT INTO knowledge_bases (name, content, tags)
+VALUES ('ARED_TOOLS', '$ARED_CONTENT', 'android,tools')
+ON CONFLICT(name) DO UPDATE SET
+    content = excluded.content,
+    tags = excluded.tags,
+    timestamp = CURRENT_TIMESTAMP;
+SQL_EOF_ARED
+
+echo "Inserted/updated ARED_TOOLS in knowledge_bases."

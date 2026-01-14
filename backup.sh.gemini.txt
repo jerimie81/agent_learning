@@ -1,0 +1,12 @@
+#!/system/bin/sh
+ZIP_BINARY="/data/app/~~srV7GI0A-h2MwLidnBaiqA==/bin.mt.termex-AWnQkRClZ_Xyst52uepirA==/lib/arm64/zip"
+echo "Starting backup process..."
+# (Re)Create backup directory
+rm -rf /data/local/tmp/backup
+mkdir -p /data/local/tmp/backup
+# Copy /data to /data/local/tmp/backup, including dotfiles
+cp -a /data/. /data/local/tmp/backup/
+# Go into backup dir and archive its contents
+cd /data/local/tmp/backup
+$ZIP_BINARY -r -0 /data/local/tmp/A16-data.zip .
+echo "Backup process complete."
