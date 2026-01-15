@@ -7,8 +7,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import secrets
 import sqlite3
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -31,6 +33,40 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _normalize_timestamp(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value, timezone.utc).isoformat()
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            try:
+                return datetime.fromtimestamp(float(text), timezone.utc).isoformat()
+            except ValueError:
+                return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        else:
+            parsed = parsed.astimezone(timezone.utc)
+        return parsed.isoformat()
+    return None
+
+
+def _uuid7() -> str:
+    timestamp_ms = int(time.time() * 1000)
+    rand_a = secrets.randbits(12)
+    rand_b = secrets.randbits(62)
+    value = (timestamp_ms << 80) | (0x7 << 76) | (rand_a << 64) | (0x2 << 62) | rand_b
+    return str(uuid.UUID(int=value))
+
+
 def _canonical_json(value: dict[str, Any]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
@@ -48,7 +84,7 @@ def _event_envelope(
     schema_version: str,
     timestamp: str | None,
 ) -> EventEnvelope:
-    event_id = str(uuid.uuid4())
+    event_id = _uuid7()
     ts = timestamp or _utc_now_iso()
     metadata = {
         "event_id": event_id,
@@ -77,8 +113,9 @@ def _table_names(conn: sqlite3.Connection) -> list[str]:
 
 
 def _table_schema(conn: sqlite3.Connection, table: str) -> dict[str, Any]:
-    columns = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    foreign_keys = conn.execute(f"PRAGMA foreign_key_list({table})").fetchall()
+    safe_table = f"\"{table.replace('\"', '\"\"')}\""
+    columns = conn.execute(f"PRAGMA table_info({safe_table})").fetchall()
+    foreign_keys = conn.execute(f"PRAGMA foreign_key_list({safe_table})").fetchall()
     return {
         "table": table,
         "columns": [
@@ -109,14 +146,15 @@ def _table_schema(conn: sqlite3.Connection, table: str) -> dict[str, Any]:
 
 
 def _row_count(conn: sqlite3.Connection, table: str) -> int:
-    row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+    safe_table = f"\"{table.replace('\"', '\"\"')}\""
+    row = conn.execute(f"SELECT COUNT(*) FROM {safe_table}").fetchone()
     return int(row[0]) if row else 0
 
 
 def _safe_json_loads(value: str) -> Any:
     try:
         return json.loads(value)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         return value
 
 
@@ -155,7 +193,8 @@ def _infer_canonical_event(table: str, row: dict[str, Any]) -> dict[str, Any] | 
 
 def _iter_rows(conn: sqlite3.Connection, table: str) -> Iterable[dict[str, Any]]:
     conn.row_factory = sqlite3.Row
-    cursor = conn.execute(f"SELECT * FROM {table}")
+    safe_table = f"\"{table.replace('\"', '\"\"')}\""
+    cursor = conn.execute(f"SELECT * FROM {safe_table}")
     for row in cursor:
         yield dict(row)
 
@@ -184,35 +223,30 @@ def migrate(
             counts_path.write_text(json.dumps(counts_report, indent=2), encoding="utf-8")
 
         actor = {"type": "system", "id": actor_id}
-        events: list[EventEnvelope] = []
-
-        for table in tables:
-            for row in _iter_rows(conn, table):
-                canonical = _infer_canonical_event(table, row)
-                payload = {
-                    "legacy_table": table,
-                    "legacy_row": row,
-                    "canonical_event": canonical,
-                }
-                timestamp = row.get("timestamp")
-                event = _event_envelope(
-                    event_type="LegacyMemoryImported",
-                    payload=payload,
-                    actor=actor,
-                    schema_version=schema_version,
-                    timestamp=timestamp,
-                )
-                events.append(event)
-
         if dry_run:
             print("Dry run complete.")
             print(json.dumps({"tables": tables, "counts": counts_report}, indent=2))
             return
 
         with events_path.open("w", encoding="utf-8") as handle:
-            for event in events:
-                handle.write(_canonical_json(event.__dict__))
-                handle.write("\n")
+            for table in tables:
+                for row in _iter_rows(conn, table):
+                    canonical = _infer_canonical_event(table, row)
+                    payload = {
+                        "legacy_table": table,
+                        "legacy_row": row,
+                        "canonical_event": canonical,
+                    }
+                    timestamp = _normalize_timestamp(row.get("timestamp"))
+                    event = _event_envelope(
+                        event_type="LegacyMemoryImported",
+                        payload=payload,
+                        actor=actor,
+                        schema_version=schema_version,
+                        timestamp=timestamp,
+                    )
+                    handle.write(_canonical_json(event.__dict__))
+                    handle.write("\n")
 
         print("Migration complete.")
         print(f"Events written: {events_path}")
